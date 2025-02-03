@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>People Counter</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        text-align: center;
+      }
+      #video-container {
+        width: 80%;
+        margin: auto;
+      }
+      h2 {
+        margin-top: 20px;
+      }
+      canvas {
+        border: 2px solid red;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>People Counter</h1>
+
+    <form id="upload-form">
+      <input type="file" name="file" id="video-file" />
+      <button type="submit">Upload Video</button>
+    </form>
+
+    <h2>Select ROI</h2>
+    <canvas id="roi-canvas"></canvas>
+    <button id="set-roi">Set ROI</button>
+
+    <h2>Live Processed Video</h2>
+    <div id="video-container">
+      <img id="video-stream" src="" width="80%" />
+    </div>
+
+    <h2>Count Statistics</h2>
+    <p>People Entered: <span id="entered">0</span></p>
+    <p>People Exited: <span id="exited">0</span></p>
+
+    <script>
+      document.getElementById("upload-form").onsubmit = function (event) {
+        event.preventDefault();
+        let formData = new FormData();
+        formData.append("file", document.getElementById("video-file").files[0]);
+        fetch("/upload", { method: "POST", body: formData })
+          .then((response) => response.json())
+          .then(() => loadFirstFrame());
+      };
+
+      let roiCoordinates = [];
+      let isDrawing = false;
+
+      function loadFirstFrame() {
+        fetch("/first_frame")
+          .then((response) => response.blob())
+          .then((blob) => {
+            let img = new Image();
+            img.src = URL.createObjectURL(blob);
+            img.onload = () => {
+              let canvas = document.getElementById("roi-canvas");
+              canvas.width = img.width;
+              canvas.height = img.height;
+              let ctx = canvas.getContext("2d");
+              ctx.drawImage(img, 0, 0);
+
+              canvas.addEventListener("mousedown", startDrawing);
+              canvas.addEventListener("mousemove", drawROI);
+              canvas.addEventListener("mouseup", finishDrawing);
+            };
+          });
+      }
+
+      function startDrawing(event) {
+        isDrawing = true;
+        roiCoordinates.push([event.offsetX, event.offsetY]);
+      }
+
+      function drawROI(event) {
+        if (!isDrawing) return;
+
+        let canvas = document.getElementById("roi-canvas");
+        let ctx = canvas.getContext("2d");
+
+        let x = event.offsetX;
+        let y = event.offsetY;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(document.getElementById("video-stream"), 0, 0); // Redraw video frame
+
+        ctx.beginPath();
+        ctx.moveTo(roiCoordinates[0][0], roiCoordinates[0][1]);
+        ctx.lineTo(x, y);
+        ctx.strokeStyle = "blue";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      function finishDrawing(event) {
+        isDrawing = false;
+        roiCoordinates.push([event.offsetX, event.offsetY]);
+      }
+
+      document.getElementById("set-roi").onclick = function () {
+        if (roiCoordinates.length < 2) {
+          alert("Please select at least two points for the ROI.");
+          return;
+        }
+        // Send ROI coordinates to the backend
+        fetch("/set_roi", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ areas: [roiCoordinates] }),
+        }).then(
+          () => (document.getElementById("video-stream").src = "/video_feed")
+        );
+      };
+
+      setInterval(() => {
+        fetch("/count")
+          .then((res) => res.json())
+          .then((data) => {
+            document.getElementById("entered").innerText = data.entered;
+            document.getElementById("exited").innerText = data.exited;
+          });
+      }, 1000);
+    </script>
+  </body>
+</html>
