@@ -43,6 +43,12 @@
     <p>People Exited: <span id="exited">0</span></p>
 
     <script>
+      let originalWidth, originalHeight; // Store actual video dimensions
+      let roiCoordinates = []; // Stores two areas (each with four points)
+      let currentArea = 0; // Tracks whether user is selecting Area 1 or Area 2
+      let canvas = document.getElementById("roi-canvas");
+      let ctx = canvas.getContext("2d");
+
       document.getElementById("upload-form").onsubmit = function (event) {
         event.preventDefault();
         let formData = new FormData();
@@ -52,74 +58,119 @@
           .then(() => loadFirstFrame());
       };
 
-      let roiCoordinates = [];
-      let isDrawing = false;
-
       function loadFirstFrame() {
         fetch("/first_frame")
-          .then((response) => response.blob())
-          .then((blob) => {
+          .then((response) => response.json())
+          .then((data) => {
             let img = new Image();
-            img.src = URL.createObjectURL(blob);
-            img.onload = () => {
-              let canvas = document.getElementById("roi-canvas");
-              canvas.width = img.width;
-              canvas.height = img.height;
-              let ctx = canvas.getContext("2d");
-              ctx.drawImage(img, 0, 0);
+            img.src = "data:image/jpeg;base64," + btoa(data.frame);
+            img.onload = function () {
+              // Ensure canvas matches actual video resolution
+              canvas.width = data.width;
+              canvas.height = data.height;
 
-              canvas.addEventListener("mousedown", startDrawing);
-              canvas.addEventListener("mousemove", drawROI);
-              canvas.addEventListener("mouseup", finishDrawing);
+              // Store original video dimensions
+              originalWidth = data.width;
+              originalHeight = data.height;
+
+              // Draw first frame
+              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+              // Click event to mark ROI points
+              canvas.addEventListener("click", markPoint);
             };
           });
       }
 
-      function startDrawing(event) {
-        isDrawing = true;
-        roiCoordinates.push([event.offsetX, event.offsetY]);
-      }
+      function markPoint(event) {
+        let rect = canvas.getBoundingClientRect();
+        let x = event.clientX - rect.left;
+        let y = event.clientY - rect.top;
 
-      function drawROI(event) {
-        if (!isDrawing) return;
+        if (!roiCoordinates[currentArea]) {
+          roiCoordinates[currentArea] = [];
+        }
 
-        let canvas = document.getElementById("roi-canvas");
-        let ctx = canvas.getContext("2d");
+        // Add point
+        roiCoordinates[currentArea].push([x, y]);
 
-        let x = event.offsetX;
-        let y = event.offsetY;
-
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(document.getElementById("video-stream"), 0, 0); // Redraw video frame
-
+        // Draw point
+        ctx.fillStyle = "red";
         ctx.beginPath();
-        ctx.moveTo(roiCoordinates[0][0], roiCoordinates[0][1]);
-        ctx.lineTo(x, y);
-        ctx.strokeStyle = "blue";
-        ctx.lineWidth = 2;
-        ctx.stroke();
+        ctx.arc(x, y, 5, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // Connect points if there are at least two
+        if (roiCoordinates[currentArea].length > 1) {
+          ctx.strokeStyle = "blue";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          let points = roiCoordinates[currentArea];
+          ctx.moveTo(
+            points[points.length - 2][0],
+            points[points.length - 2][1]
+          );
+          ctx.lineTo(
+            points[points.length - 1][0],
+            points[points.length - 1][1]
+          );
+          ctx.stroke();
+        }
+
+        // Close the polygon when four points are selected
+        if (roiCoordinates[currentArea].length === 4) {
+          ctx.beginPath();
+          ctx.moveTo(
+            roiCoordinates[currentArea][3][0],
+            roiCoordinates[currentArea][3][1]
+          );
+          ctx.lineTo(
+            roiCoordinates[currentArea][0][0],
+            roiCoordinates[currentArea][0][1]
+          );
+          ctx.stroke();
+
+          if (currentArea === 0) {
+            alert("Area 1 set! Now select Area 2.");
+            currentArea = 1; // Move to selecting Area 2
+          } else {
+            alert("Area 2 set! Click 'Set ROI' to confirm.");
+          }
+        }
       }
 
-      function finishDrawing(event) {
-        isDrawing = false;
-        roiCoordinates.push([event.offsetX, event.offsetY]);
-      }
-
+      // Scale and send ROI data to Python backend
       document.getElementById("set-roi").onclick = function () {
-        if (roiCoordinates.length < 2) {
-          alert("Please select at least two points for the ROI.");
+        if (
+          roiCoordinates.length < 2 ||
+          roiCoordinates[0].length < 4 ||
+          roiCoordinates[1].length < 4
+        ) {
+          alert(
+            "Please select exactly four points for both Area 1 and Area 2."
+          );
           return;
         }
-        // Send ROI coordinates to the backend
+
+        // Scale ROI coordinates to match original video dimensions
+        let scaledAreas = roiCoordinates.map((area) =>
+          area.map((point) => [
+            Math.round((point[0] / canvas.width) * originalWidth),
+            Math.round((point[1] / canvas.height) * originalHeight),
+          ])
+        );
+
         fetch("/set_roi", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ areas: [roiCoordinates] }),
-        }).then(
-          () => (document.getElementById("video-stream").src = "/video_feed")
-        );
+          body: JSON.stringify({ areas: scaledAreas }),
+        }).then(() => {
+          alert("ROI successfully set!");
+          document.getElementById("video-stream").src = "/video_feed"; // Start video processing
+        });
       };
 
+      // Periodically update count statistics
       setInterval(() => {
         fetch("/count")
           .then((res) => res.json())
