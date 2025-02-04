@@ -160,6 +160,7 @@
           ])
         );
 
+        // Send scaled coordinates to the backend
         fetch("/set_roi", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

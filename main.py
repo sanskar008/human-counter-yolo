@@ -152,6 +152,7 @@ def set_roi():
 
     return jsonify({"message": "ROI set successfully"})
 
+
 @app.route("/video_feed")
 def video_feed():
     return Response(process_video(), mimetype="multipart/x-mixed-replace; boundary=frame")
